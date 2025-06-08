@@ -1,4 +1,5 @@
 import os
+import re
 import aiohttp
 import asyncio
 from aiogram import Bot, Dispatcher, types, F
@@ -7,7 +8,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
-    InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+    InlineKeyboardMarkup, InlineKeyboardButton
 )
 from aiogram.enums import ParseMode
 from dotenv import load_dotenv
@@ -17,7 +18,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000/api")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").replace(",", " ").split() if x]
 
-# Используем DefaultBotProperties для новых версий aiogram, иначе просто parse_mode
 try:
     bot = Bot(token=BOT_TOKEN, default=types.DefaultBotProperties(parse_mode=ParseMode.HTML))
 except AttributeError:
@@ -25,9 +25,38 @@ except AttributeError:
 
 dp = Dispatcher()
 
-# FSM для задач
 class AddTask(StatesGroup):
     waiting_for_video_url = State()
+    waiting_for_action = State()
+
+def main_menu_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🎬 Добавить задачу")],
+            [KeyboardButton(text="📋 Мои задачи")]
+        ],
+        resize_keyboard=True
+    )
+
+def choose_action_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⬇️ Скачать", callback_data="action:download"),
+            InlineKeyboardButton(text="🔄 Перезалить", callback_data="action:reupload"),
+        ]
+    ])
+
+def is_supported_url(url: str):
+    YOUTUBE_RE = r'(https?://)?(www\.)?(youtube\.com|youtu\.be)/'
+    VK_RE = r'(https?://)?(www\.)?vk\.com/video'
+    RUTUBE_RE = r'(https?://)?(www\.)?rutube\.ru/video/'
+    DZEN_RE = r'(https?://)?(www\.)?dzen\.ru/video/'
+    return (
+        re.match(YOUTUBE_RE, url) or
+        re.match(VK_RE, url) or
+        re.match(RUTUBE_RE, url) or
+        re.match(DZEN_RE, url)
+    )
 
 async def api_get_user(telegram_id):
     async with aiohttp.ClientSession() as session:
@@ -41,25 +70,18 @@ async def api_register_user(telegram_id):
         async with session.post(f"{BACKEND_URL}/users/register", params={"telegram_id": telegram_id}) as resp:
             return await resp.json()
 
-async def api_create_task(telegram_id, video_url):
+async def api_create_task(telegram_id, video_url, action):
     async with aiohttp.ClientSession() as session:
         async with session.post(f"{BACKEND_URL}/tasks/create", params={
             "telegram_id": telegram_id,
-            "video_url": video_url
+            "video_url": video_url,
+            "action": action
         }) as resp:
             return await resp.json()
 
 async def api_get_tasks(telegram_id):
     async with aiohttp.ClientSession() as session:
         async with session.get(f"{BACKEND_URL}/tasks/{telegram_id}") as resp:
-            return await resp.json()
-
-async def api_update_user_status(telegram_id, status):
-    async with aiohttp.ClientSession() as session:
-        async with session.post(f"{BACKEND_URL}/users/update_status", params={
-            "telegram_id": telegram_id,
-            "status": status
-        }) as resp:
             return await resp.json()
 
 @dp.message(Command("start"))
@@ -109,15 +131,6 @@ async def cmd_start(message: types.Message):
             except Exception as e:
                 print(f"Ошибка при отправке админу {admin_id}: {e}")
 
-def main_menu_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🎬 Добавить задачу")],
-            [KeyboardButton(text="📋 Мои задачи")]
-        ],
-        resize_keyboard=True
-    )
-
 @dp.message(F.text == "🎬 Добавить задачу")
 async def ask_video_url(message: types.Message, state: FSMContext):
     telegram_id = str(message.from_user.id)
@@ -137,22 +150,23 @@ async def get_video_url(message: types.Message, state: FSMContext):
         await state.clear()
         return
     video_url = message.text.strip()
-    if not video_url.startswith("http"):
-        await message.answer("Похоже, это не ссылка. Пожалуйста, попробуйте снова.")
+    if not is_supported_url(video_url):
+        await message.answer("Пока поддерживаются только YouTube, VK Видео, RuTube и Яндекс.Дзен.")
         return
-    result = await api_create_task(telegram_id, video_url)
-    await message.answer(
-        f"Задача добавлена!\nID: <b>{result.get('task_id')}</b>\nСтатус: <b>{result.get('status', 'ожидание')}</b>",
-        parse_mode="HTML",
-        reply_markup=main_menu_keyboard()
-    )
-    await state.clear()
+    await state.update_data(video_url=video_url)
+    await message.answer("Что сделать с этим видео?", reply_markup=choose_action_keyboard())
+    await state.set_state(AddTask.waiting_for_action)
 
 @dp.message(F.text == "📋 Мои задачи")
 async def show_my_tasks(message: types.Message):
     telegram_id = str(message.from_user.id)
+    user = await api_get_user(telegram_id)
+    if not user or user.get("status") != "approved":
+        await message.answer("Вы не одобрены для использования сервиса.")
+        return
     tasks = await api_get_tasks(telegram_id)
-    if not tasks or (isinstance(tasks, dict) and tasks.get("detail") == "User not found"):
+    # Исправлено: обработка случая, когда задач нет
+    if not tasks or (isinstance(tasks, dict) and tasks.get("detail") == "User not found") or (isinstance(tasks, list) and len(tasks) == 0):
         await message.answer("У вас пока нет задач.")
         return
     text = "<b>Ваши задачи:</b>\n"
@@ -160,48 +174,50 @@ async def show_my_tasks(message: types.Message):
         text += f"ID: <b>{task['task_id']}</b> | Статус: <b>{task['status']}</b>\nВидео: {task['video_url']}\n\n"
     await message.answer(text, parse_mode="HTML")
 
-# --- CALLBACK HANDLERS ---
-
-@dp.callback_query(F.data.startswith("approve:"))
-async def approve_user_callback(call: CallbackQuery):
-    # approve:telegram_id:chat_id
-    parts = call.data.split(":")
-    telegram_id, chat_id = parts[1], parts[2]
-    await api_update_user_status(telegram_id, "approved")
-    await call.answer("Пользователь одобрен", show_alert=True)
-    await call.message.edit_text(
-        f"✅ Пользователь <code>{telegram_id}</code> ОДОБРЕН",
-        parse_mode="HTML"
+@dp.callback_query(F.data.startswith("action:"))
+async def process_action_callback(callback: types.CallbackQuery, state: FSMContext):
+    telegram_id = str(callback.from_user.id)
+    user = await api_get_user(telegram_id)
+    if not user or user.get("status") != "approved":
+        await callback.message.answer("Вы не одобрены для использования сервиса.")
+        await state.clear()
+        await callback.answer()
+        return
+    data = await state.get_data()
+    video_url = data.get("video_url")
+    if not video_url:
+        await callback.message.answer("Ошибка: не найдена ссылка на видео. Попробуйте добавить задачу снова.")
+        await state.clear()
+        await callback.answer()
+        return
+    action = callback.data.split(":")[1]
+    result = await api_create_task(telegram_id, video_url, action)
+    await callback.message.answer(
+        f"Задача добавлена!\nID: <b>{result.get('task_id')}</b>\nСтатус: <b>{result.get('status', 'ожидание')}</b>",
+        parse_mode="HTML",
+        reply_markup=main_menu_keyboard()
     )
-    # Уведомить пользователя:
-    try:
-        await bot.send_message(
-            int(telegram_id),
-            "🎉 Ваша заявка одобрена! Добро пожаловать!",
-            reply_markup=main_menu_keyboard()
-        )
-    except Exception as e:
-        print(f"Ошибка при отправке уведомления пользователю {telegram_id}: {e}")
+    await state.clear()
+    await callback.answer("Задача создана!")
 
-@dp.callback_query(F.data.startswith("reject:"))
-async def reject_user_callback(call: CallbackQuery):
-    # reject:telegram_id:chat_id
-    parts = call.data.split(":")
-    telegram_id, chat_id = parts[1], parts[2]
-    await api_update_user_status(telegram_id, "rejected")
-    await call.answer("Пользователь отклонён", show_alert=True)
-    await call.message.edit_text(
-        f"❌ Пользователь <code>{telegram_id}</code> ОТКЛОНЁН",
-        parse_mode="HTML"
-    )
-    # Уведомить пользователя:
-    try:
-        await bot.send_message(
-            int(telegram_id),
-            "⛔️ Ваша заявка отклонена. Доступ к сервису запрещён."
-        )
-    except Exception as e:
-        print(f"Ошибка при отправке уведомления пользователю {telegram_id}: {e}")
+@dp.message()
+async def handle_any_message(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    if not text:
+        return
+    if is_supported_url(text):
+        telegram_id = str(message.from_user.id)
+        user = await api_get_user(telegram_id)
+        if not user or user.get("status") != "approved":
+            await message.answer("Вы не одобрены для использования сервиса.")
+            return
+        await state.update_data(video_url=text)
+        await message.answer("Что сделать с этим видео?", reply_markup=choose_action_keyboard())
+        await state.set_state(AddTask.waiting_for_action)
+    elif text.startswith("http"):
+        await message.answer("Пока поддерживаются только YouTube, VK Видео, RuTube и Яндекс.Дзен.")
+    else:
+        await message.answer("Отправьте ссылку на видео или используйте команды меню.")
 
 async def main():
     await dp.start_polling(bot)

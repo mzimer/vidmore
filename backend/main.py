@@ -11,7 +11,6 @@ app = FastAPI(
     servers=[{"url": "/api"}]
 )
 
-# Обработчик ошибок, чтобы все HTTPException были в формате JSON
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
@@ -61,11 +60,16 @@ def update_user_status(
     return {"msg": "status_updated", "telegram_id": user.telegram_id, "status": user.status.value}
 
 @app.post("/api/tasks/create")
-def create_task(telegram_id: str, video_url: str, db: Session = Depends(get_db)):
+def create_task(
+    telegram_id: str,
+    video_url: str,
+    action: str = "download",  # <--- добавили параметр
+    db: Session = Depends(get_db)
+):
     user = db.query(User).filter_by(telegram_id=telegram_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    task = Task(user_id=user.id, video_url=video_url)
+    task = Task(user_id=user.id, video_url=video_url, action=action)
     db.add(task)
     db.commit()
     db.refresh(task)
