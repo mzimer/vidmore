@@ -1,0 +1,10 @@
+fastapi==0.110.0
+uvicorn[standard]
+sqlalchemy
+asyncpg
+psycopg2-binary
+alembic
+python-dotenv
+aiogram==3.6.0
+aiohttp
+python-dotenv

@@ -1,0 +1,33 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: vidmore_backend
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+
+  bot:
+    build:
+      context: ./bot
+    container_name: vidmore_bot
+    env_file:
+      - ./bot/.env
+    depends_on:
+      - backend
+
+  postgres:
+    image: postgres:16
+    container_name: vidmore_postgres
+    environment:
+      POSTGRES_DB: vidmore
+      POSTGRES_USER: vidmore
+      POSTGRES_PASSWORD: strongpass
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    restart: always
