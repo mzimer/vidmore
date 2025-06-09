@@ -1,26 +1,4 @@
-version: "3.8"
-
 services:
-  backend:
-    build:
-      context: ./backend
-    container_name: vidmore_backend
-    env_file:
-      - ./backend/.env
-    ports:
-      - "8000:8000"
-    depends_on:
-      - postgres
-
-  bot:
-    build:
-      context: ./bot
-    container_name: vidmore_bot
-    env_file:
-      - ./bot/.env
-    depends_on:
-      - backend
-
   postgres:
     image: postgres:16
     container_name: vidmore_postgres
@@ -31,3 +9,40 @@ services:
     volumes:
       - ./pgdata:/var/lib/postgresql/data
     restart: always
+
+  backend:
+    build:
+      context: ./backend
+    container_name: vidmore_backend
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+    volumes:
+      - ./downloads:/downloads
+
+  bot:
+    build:
+      context: ./bot
+    container_name: vidmore_bot
+    env_file:
+      - ./bot/.env
+    depends_on:
+      - backend
+    volumes:
+      - ./downloads:/downloads
+
+  download_worker:
+    build:
+      context: .                    # <--- КОРЕНЬ ПРОЕКТА
+      dockerfile: download_worker/Dockerfile
+    container_name: vidmore_download_worker
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - backend
+      - postgres
+    volumes:
+      - ./downloads:/downloads

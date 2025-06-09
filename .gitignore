@@ -1,5 +1,21 @@
+# Секретные файлы
 .env
-.env
+backend/.env
+bot/.env
+
+# База данных Postgres
 pgdata/
-.env
-pgdata/
+
+# Видео и скачанные файлы
+downloads/
+
+# Кэш, временные и служебные файлы
+__pycache__/
+*.pyc
+*.pyo
+*.sqlite3
+.DS_Store
+
+# Логи
+*.log
+

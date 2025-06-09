@@ -12,10 +12,13 @@ class UserStatus(enum.Enum):
     rejected = "rejected"
 
 class TaskStatus(enum.Enum):
-    pending = "pending"
-    in_progress = "in_progress"
-    completed = "completed"
-    failed = "failed"
+    # Указываем все необходимые статусы, которые будут использоваться в проекте и воркерах
+    queued = "queued"          # Задача в очереди на обработку
+    downloading = "downloading" # Задача скачивается
+    processing = "processing"   # Идет обработка (например, конвертация)
+    uploading = "uploading"     # Загрузка на платформу
+    completed = "completed"     # Всё успешно завершено
+    failed = "failed"           # Ошибка при выполнении
 
 class User(Base):
     __tablename__ = "users"
@@ -29,8 +32,6 @@ class Task(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     video_url = Column(String, nullable=False)
-    status = Column(Enum(TaskStatus), default=TaskStatus.pending, nullable=False)
-    # Вот это новая строка:
-    action = Column(String, nullable=True)
-
+    status = Column(Enum(TaskStatus), default=TaskStatus.queued, nullable=False)
+    action = Column(String, nullable=True)  # download / upload / etc.
     user = relationship("User", back_populates="tasks")
